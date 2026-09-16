@@ -158,27 +158,62 @@ async function decodeBlob(blob){
   status("Audio loaded. Press Analyze audio.");
 }
 
+function pickMimeType(){
+  const types=["audio/mp4","audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus"];
+  return types.find(t=>window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
+}
+
 $("startBtn").onclick=async()=>{
   try{
-    mediaStream=await navigator.mediaDevices.getUserMedia({audio:true});
-    recorder=new MediaRecorder(mediaStream);
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)
+      throw new Error("Microphone recording is not supported by this browser.");
+
+    mediaStream=await navigator.mediaDevices.getUserMedia({
+      audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}
+    });
+
+    const mime=pickMimeType();
+    recorder=mime ? new MediaRecorder(mediaStream,{mimeType:mime}) : new MediaRecorder(mediaStream);
     chunks=[];
-    recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
-    recorder.onstop=async()=>{
-      mediaStream.getTracks().forEach(t=>t.stop());
-      const blob=new Blob(chunks,{type:recorder.mimeType||"audio/webm"});
-      await decodeBlob(blob);
+
+    recorder.ondataavailable=e=>{if(e.data && e.data.size)chunks.push(e.data)};
+    recorder.onerror=()=>{
+      status("❌ Recording error. Please try again.");
+      $("startBtn").disabled=false;
+      $("stopBtn").disabled=true;
     };
-    recorder.start();
-    $("startBtn").disabled=true;$("stopBtn").disabled=false;
-    status("Recording… breathe normally and keep the microphone steady.");
-  }catch(e){status("Microphone error: "+e.message)}
+
+    recorder.onstop=async()=>{
+      try{
+        mediaStream.getTracks().forEach(t=>t.stop());
+        const type=recorder.mimeType || mime || "audio/mp4";
+        const blob=new Blob(chunks,{type});
+        if(!blob.size) throw new Error("No audio was captured.");
+        await decodeBlob(blob);
+        status("✅ Recording complete. Audio analysis is ready.");
+      }catch(err){
+        console.error(err);
+        status("❌ Could not process the recording. Please try uploading a WAV file instead.");
+      }
+    };
+
+    recorder.start(250);
+    $("startBtn").disabled=true;
+    $("stopBtn").disabled=false;
+    status("🔴 Recording… breathe normally for 5–10 seconds, then press Stop.");
+  }catch(e){
+    console.error(e);
+    status("❌ Microphone error: "+e.message);
+    $("startBtn").disabled=false;
+    $("stopBtn").disabled=true;
+  }
 };
 
 $("stopBtn").onclick=()=>{
-  if(recorder&&recorder.state!=="inactive"){
-    recorder.stop();$("stopBtn").disabled=true;$("startBtn").disabled=false;
+  if(recorder && recorder.state!=="inactive"){
     status("Processing recording…");
+    $("stopBtn").disabled=true;
+    recorder.stop();
   }
 };
 
@@ -186,61 +221,34 @@ $("audioFile").onchange=async e=>{
   const file=e.target.files[0];
   if(!file)return;
   status("Loading audio…");
-  try{await decodeBlob(file);status("Audio loaded.")}
-  catch(err){status("Could not decode this audio file: "+err.message)}
+  try{
+    await decodeBlob(file);
+    status("✅ Audio loaded. Signal analysis is ready.");
+  }catch(err){
+    console.error(err);
+    status("❌ Could not decode this file. Please use WAV, MP3, or M4A.");
+  }
 };
 
-function softmax(arr){
-  const m=Math.max(...arr), ex=arr.map(x=>Math.exp(x-m)),s=ex.reduce((a,b)=>a+b,0);
-  return ex.map(x=>x/s);
-}
+async function decodeBlob(blob){
+  currentBlob=blob;
+  const url=URL.createObjectURL(blob);
+  $("player").src=url;
+  $("player").load();
 
-async function predict(){
-  if(!model||!currentAudioBuffer)return;
-  $("predictBtn").disabled=true;
-  $("prediction").textContent="Analyzing…";
-  $("result").style.display="block";
-  try{
-    /*
-      IMPORTANT:
-      The exact input shape/preprocessing depends on the trained model.
-      This generic adapter supports models whose input is a fixed 1-D audio
-      waveform. If your model expects MFCC/chroma/RMS/ZCR features, replace
-      prepareModelInput() with the exact training pipeline.
-    */
-    const input=prepareModelInput(currentAudioBuffer,model.inputs[0].shape);
-    const out=model.predict(input);
-    const tensor=Array.isArray(out)?out[0]:out;
-    const raw=Array.from(await tensor.data());
-    tf.dispose([input,out]);
-    const probs=softmax(raw);
-    const best=probs.indexOf(Math.max(...probs));
-    const label=CLASSES[best]||("Class "+best);
-    const conf=probs[best]*100;
-    $("prediction").textContent=label;
-    $("confidence").textContent=conf.toFixed(1)+"%";
-    $("bar").style.width=conf+"%";
-    $("probTable").innerHTML="<tr><th>Class</th><th>Probability</th></tr>"+
-      probs.map((p,i)=>`<tr><td>${CLASSES[i]||"Class "+i}</td><td>${(p*100).toFixed(2)}%</td></tr>`).join("");
-  }catch(e){
-    $("prediction").textContent="Model input mismatch";
-    $("confidence").textContent="—";
-    $("bar").style.width="0";
-    $("probTable").innerHTML="<tr><td colspan='2'>"+escapeHtml(e.message)+"</td></tr>";
-  }finally{$("predictBtn").disabled=false}
-}
+  if(!audioContext) audioContext=new (window.AudioContext||window.webkitAudioContext)();
+  if(audioContext.state==="suspended") await audioContext.resume();
 
-/* Generic waveform adapter. Replace this only when the actual trained model
-   requires a feature vector such as MFCC/chroma/RMS/ZCR. */
-function prepareModelInput(buffer,shape){
-  const expected=shape.slice(1).filter(x=>x!=null);
-  if(expected.length!==1)throw new Error("This model expects a feature tensor, not raw audio. Its training preprocessing must be added here.");
-  const n=expected[0],src=buffer.getChannelData(0),x=new Float32Array(n);
-  for(let i=0;i<n;i++){
-    const pos=Math.floor(i*(src.length-1)/Math.max(1,n-1));
-    x[i]=src[pos];
-  }
-  return tf.tensor(x,[1,n,1]);
+  const arr=await blob.arrayBuffer();
+  currentAudioBuffer=await audioContext.decodeAudioData(arr.slice(0));
+
+  const ch=currentAudioBuffer.getChannelData(0);
+  analyzeSamples(ch,currentAudioBuffer.sampleRate);
+
+  $("predictBtn").disabled=!model;
+  $("modelStatus").innerHTML=model
+    ? "✅ AI model loaded. <b>Analyze audio</b> is ready."
+    : "⚠️ Audio is ready, but no trained AI model is installed yet. Signal analysis works; disease prediction is unavailable.";
 }
 
 $("predictBtn").onclick=predict;
