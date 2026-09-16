@@ -1,1134 +1,252 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Diagnosing lung disease from breath sound — a 1D CNN on ICBHI 2017</title>
-<meta name="description" content="A convolutional neural network trained on the ICBHI 2017 Respiratory Sound Database, classifying eight respiratory conditions from breathing-cycle audio." />
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Lung Sound Analyzer | AI Respiratory Demo</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
 <style>
-  :root{
-    --void:#0A1512;
-    --panel:#0F1E1A;
-    --panel-raised:#122420;
-    --grid:#1B2E28;
-    --hair:#24382F;
-    --phosphor:#8FEFC7;
-    --phosphor-dim:#4C7C6C;
-    --amber:#E7A94C;
-    --paper:#E9F3EE;
-    --muted:#89A099;
-    --muted-2:#5C726B;
-    --danger:#E0765E;
-
-    --font-display:'Space Grotesk', sans-serif;
-    --font-body:'IBM Plex Sans', sans-serif;
-    --font-mono:'IBM Plex Mono', monospace;
-
-    --maxw:1120px;
-  }
-
-  *{box-sizing:border-box;}
-  html{scroll-behavior:smooth;}
-  body{
-    margin:0;
-    background:var(--void);
-    color:var(--paper);
-    font-family:var(--font-body);
-    font-size:16px;
-    line-height:1.6;
-    -webkit-font-smoothing:antialiased;
-  }
-
-  body::before{
-    content:"";
-    position:fixed;
-    inset:0;
-    pointer-events:none;
-    z-index:0;
-    background-image:
-      linear-gradient(var(--grid) 1px, transparent 1px),
-      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
-    background-size:42px 42px;
-    opacity:0.35;
-    mask-image:radial-gradient(ellipse 100% 60% at 50% 0%, black 0%, transparent 75%);
-  }
-
-  a{color:inherit;}
-  h1,h2,h3{font-family:var(--font-display); margin:0; font-weight:600;}
-  p{margin:0;}
-
-  .wrap{max-width:var(--maxw); margin:0 auto; padding:0 28px; position:relative; z-index:1;}
-
-  ::selection{background:var(--phosphor); color:var(--void);}
-
-  :focus-visible{outline:2px solid var(--phosphor); outline-offset:3px;}
-
-  /* ---------- NAV ---------- */
-  header.site{
-    position:sticky; top:0; z-index:50;
-    background:rgba(10,21,18,0.86);
-    backdrop-filter:blur(10px);
-    border-bottom:1px solid var(--hair);
-  }
-  .nav{
-    display:flex; align-items:center; justify-content:space-between;
-    padding:18px 28px;
-    max-width:var(--maxw); margin:0 auto;
-  }
-  .nav-mark{
-    font-family:var(--font-mono); font-size:13px; letter-spacing:0.02em;
-    color:var(--paper); display:flex; align-items:center; gap:8px;
-    text-decoration:none;
-  }
-  .nav-mark .dot{width:7px; height:7px; border-radius:50%; background:var(--phosphor); box-shadow:0 0 8px var(--phosphor);}
-  .nav-links{display:flex; gap:28px; list-style:none; margin:0; padding:0;}
-  .nav-links a{
-    font-family:var(--font-mono); font-size:13px; color:var(--muted);
-    text-decoration:none; padding-bottom:3px; border-bottom:1px solid transparent;
-    transition:color .15s ease, border-color .15s ease;
-  }
-  .nav-links a:hover{color:var(--phosphor); border-color:var(--phosphor-dim);}
-  @media (max-width:640px){ .nav-links{display:none;} }
-
-  /* ---------- HERO ---------- */
-  .hero{padding:76px 0 64px; position:relative; overflow:hidden;}
-  .hero-kicker{
-    font-family:var(--font-mono); font-size:12.5px; color:var(--phosphor);
-    display:flex; align-items:center; gap:10px; margin-bottom:22px;
-  }
-  .hero-kicker .rule{width:34px; height:1px; background:var(--phosphor-dim);}
-  .hero h1{
-    font-size:clamp(34px, 5.6vw, 62px);
-    line-height:1.06;
-    letter-spacing:-0.01em;
-    max-width:15ch;
-    color:var(--paper);
-  }
-  .hero .sub{
-    margin-top:22px;
-    max-width:54ch;
-    font-size:17px;
-    color:var(--muted);
-  }
-  .hero .sub b{color:var(--paper); font-weight:500;}
-
-  .stat-row{
-    display:flex; flex-wrap:wrap; gap:0;
-    margin-top:44px;
-    border-top:1px solid var(--hair);
-  }
-  .stat{
-    flex:1 1 180px;
-    padding:18px 24px 0 0;
-    border-right:1px solid var(--hair);
-  }
-  .stat:last-child{border-right:none;}
-  .stat .num{
-    font-family:var(--font-mono); font-size:26px; color:var(--phosphor); font-weight:500;
-  }
-  .stat .label{
-    font-size:12.5px; color:var(--muted-2); margin-top:4px; max-width:22ch;
-  }
-
-  .wave-box{
-    margin-top:56px;
-    border:1px solid var(--hair);
-    background:var(--panel);
-    border-radius:2px;
-  }
-  .wave-box .scope-head{
-    display:flex; justify-content:space-between; align-items:center;
-    padding:10px 16px; border-bottom:1px solid var(--hair);
-    font-family:var(--font-mono); font-size:11.5px; color:var(--muted-2);
-  }
-  .wave-box svg{display:block; width:100%; height:auto;}
-  .wave-path{
-    fill:none; stroke:var(--phosphor); stroke-width:1.6;
-    stroke-linecap:round; stroke-linejoin:round;
-    filter:drop-shadow(0 0 5px rgba(143,239,199,0.35));
-    stroke-dasharray:4400;
-    stroke-dashoffset:4400;
-    animation:draw 2.6s ease-out forwards .2s;
-  }
-  @keyframes draw{ to{ stroke-dashoffset:0; } }
-  @media (prefers-reduced-motion: reduce){
-    .wave-path{animation:none; stroke-dashoffset:0;}
-  }
-
-  /* ---------- SECTION SHELL ---------- */
-  section{padding:88px 0; border-top:1px solid var(--hair);}
-  .section-head{
-    display:grid;
-    grid-template-columns:220px 1fr;
-    gap:40px;
-  }
-  .section-head .tag{
-    font-family:var(--font-mono); font-size:12.5px; color:var(--muted-2);
-    padding-top:6px;
-  }
-  .section-head h2{
-    font-size:clamp(24px, 3vw, 32px);
-    max-width:16ch;
-    color:var(--paper);
-  }
-  .section-body{
-    grid-column:2;
-    margin-top:26px;
-    max-width:66ch;
-    color:var(--muted);
-    font-size:15.5px;
-  }
-  .section-body p + p{margin-top:14px;}
-  @media (max-width:760px){
-    .section-head{grid-template-columns:1fr;}
-    .section-body{grid-column:1;}
-  }
-
-  /* ---------- DATA CHART ---------- */
-  .chart-panel{
-    grid-column:2;
-    margin-top:36px;
-    border:1px solid var(--hair);
-    background:var(--panel);
-    padding:28px 28px 22px;
-  }
-  @media (max-width:760px){ .chart-panel{grid-column:1;} }
-  .bar-row{
-    display:grid;
-    grid-template-columns:132px 1fr 80px;
-    align-items:center;
-    gap:14px;
-    padding:9px 0;
-    border-bottom:1px solid var(--grid);
-  }
-  .bar-row:last-child{border-bottom:none;}
-  .bar-row .name{font-size:13.5px; color:var(--paper);}
-  .bar-row .name .full{color:var(--muted-2); font-size:11.5px; display:block;}
-  .bar-track{height:9px; background:var(--grid); position:relative;}
-  .bar-fill{height:100%; background:linear-gradient(90deg, var(--phosphor-dim), var(--phosphor));}
-  .bar-fill.amber{background:linear-gradient(90deg, #8a6321, var(--amber));}
-  .bar-row .count{
-    font-family:var(--font-mono); font-size:12.5px; color:var(--muted); text-align:right;
-  }
-  .chart-foot{
-    margin-top:18px; padding-top:16px; border-top:1px solid var(--hair);
-    font-family:var(--font-mono); font-size:11.5px; color:var(--muted-2);
-  }
-
-  /* ---------- PIPELINE ---------- */
-  .pipeline{grid-column:2; margin-top:36px; display:flex; flex-direction:column;}
-  @media (max-width:760px){ .pipeline{grid-column:1;} }
-  .step{
-    display:grid;
-    grid-template-columns:56px 1fr;
-    gap:20px;
-    padding:22px 0;
-    border-top:1px solid var(--hair);
-  }
-  .step:first-child{border-top:none;}
-  .step .idx{
-    font-family:var(--font-mono); font-size:13px; color:var(--phosphor);
-    padding-top:2px;
-  }
-  .step h3{font-size:16.5px; color:var(--paper); font-weight:500;}
-  .step p{margin-top:7px; font-size:14.5px; color:var(--muted); max-width:58ch;}
-  .step .meta{
-    margin-top:10px; font-family:var(--font-mono); font-size:11.5px; color:var(--muted-2);
-  }
-
-  /* ---------- RESULTS ---------- */
-  .headline-stat{
-    grid-column:2;
-    margin-top:30px;
-    display:flex; align-items:baseline; gap:20px; flex-wrap:wrap;
-  }
-  @media (max-width:760px){ .headline-stat{grid-column:1;} }
-  .headline-stat .big{
-    font-family:var(--font-mono); font-size:clamp(48px,8vw,84px);
-    color:var(--phosphor); line-height:1; font-weight:500;
-    text-shadow:0 0 24px rgba(143,239,199,0.25);
-  }
-  .headline-stat .desc{font-size:14.5px; color:var(--muted); max-width:30ch;}
-
-  .metrics-panel{
-    grid-column:2;
-    margin-top:36px;
-    border:1px solid var(--hair);
-    background:var(--panel);
-  }
-  @media (max-width:760px){ .metrics-panel{grid-column:1;} }
-  .metrics-head, .metrics-row{
-    display:grid;
-    grid-template-columns:1.3fr 1fr 1fr 1fr 0.7fr;
-    gap:10px;
-    padding:12px 22px;
-    align-items:center;
-  }
-  .metrics-head{
-    font-family:var(--font-mono); font-size:11px; color:var(--muted-2);
-    border-bottom:1px solid var(--hair);
-  }
-  .metrics-row{border-bottom:1px solid var(--grid); font-size:13.5px;}
-  .metrics-row:last-child{border-bottom:none;}
-  .metrics-row .cls{color:var(--paper);}
-  .metrics-row .rare{color:var(--amber);}
-  .metric-bar{height:6px; background:var(--grid); position:relative;}
-  .metric-bar span{position:absolute; inset:0; background:var(--phosphor-dim);}
-  .metric-bar.low span{background:var(--amber);}
-  .metrics-row .support{font-family:var(--font-mono); color:var(--muted-2); text-align:right;}
-  @media (max-width:640px){
-    .metrics-head{display:none;}
-    .metrics-row{grid-template-columns:1fr 1fr; row-gap:6px;}
-    .metrics-row .cls{grid-column:1/-1;}
-    .metrics-row .support{grid-column:1/-1; text-align:left; margin-top:2px;}
-  }
-
-  .callout{
-    grid-column:2;
-    margin-top:26px;
-    border-left:2px solid var(--amber);
-    padding:4px 0 4px 20px;
-    font-size:14.5px;
-    color:var(--muted);
-    max-width:64ch;
-  }
-  @media (max-width:760px){ .callout{grid-column:1;} }
-  .callout b{color:var(--paper); font-weight:500;}
-
-  /* ---------- TRY IT (LIVE MIC) ---------- */
-  .not-diagnosis{
-    grid-column:2;
-    margin-top:30px;
-    border:1px solid #4a3420;
-    background:rgba(231,169,76,0.06);
-    padding:16px 20px;
-    display:flex; gap:14px; align-items:flex-start;
-    max-width:70ch;
-  }
-  @media (max-width:760px){ .not-diagnosis{grid-column:1;} }
-  .not-diagnosis .flag{
-    font-family:var(--font-mono); font-size:11px; color:var(--amber);
-    border:1px solid #4a3420; padding:3px 7px; white-space:nowrap; margin-top:1px;
-  }
-  .not-diagnosis p{font-size:13.5px; color:var(--muted);}
-  .not-diagnosis p b{color:var(--paper); font-weight:500;}
-
-  .mic-panel{
-    grid-column:2;
-    margin-top:26px;
-    border:1px solid var(--hair);
-    background:var(--panel);
-  }
-  @media (max-width:760px){ .mic-panel{grid-column:1;} }
-  .mic-head{
-    display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;
-    padding:14px 20px; border-bottom:1px solid var(--hair);
-  }
-  .mic-status{
-    font-family:var(--font-mono); font-size:11.5px; color:var(--muted-2);
-    display:flex; align-items:center; gap:8px;
-  }
-  .mic-status .led{width:7px; height:7px; border-radius:50%; background:var(--muted-2);}
-  .mic-status.live .led{background:var(--phosphor); box-shadow:0 0 8px var(--phosphor);}
-  .mic-status.live{color:var(--phosphor);}
-
-  .mic-btn{
-    font-family:var(--font-mono); font-size:12.5px; color:var(--void);
-    background:var(--phosphor); border:none; padding:9px 18px; cursor:pointer;
-    letter-spacing:0.01em;
-  }
-  .mic-btn:hover{background:#a6f4d5;}
-  .mic-btn.stop{background:transparent; color:var(--danger); border:1px solid var(--danger);}
-  .mic-btn.stop:hover{background:rgba(224,118,94,0.1);}
-  .mic-btn:disabled{opacity:0.5; cursor:not-allowed;}
-
-  .scope-double{display:grid; grid-template-columns:1fr; border-bottom:1px solid var(--hair);}
-  .scope-double canvas{display:block; width:100%; height:130px; background:var(--void);}
-  .scope-double .row{border-bottom:1px solid var(--hair);}
-  .scope-double .row:last-child{border-bottom:none;}
-  .scope-double .row .cap{
-    font-family:var(--font-mono); font-size:10.5px; color:var(--muted-2);
-    padding:8px 14px 0;
-  }
-
-  .mic-readouts{
-    display:grid; grid-template-columns:repeat(3,1fr);
-    gap:0;
-  }
-  .mic-readouts .rd{padding:16px 20px; border-right:1px solid var(--hair);}
-  .mic-readouts .rd:last-child{border-right:none;}
-  .mic-readouts .rd .num{
-    font-family:var(--font-mono); font-size:22px; color:var(--paper);
-  }
-  .mic-readouts .rd .lbl{font-size:11.5px; color:var(--muted-2); margin-top:4px;}
-  @media (max-width:600px){
-    .mic-readouts{grid-template-columns:1fr 1fr;}
-    .mic-readouts .rd:nth-child(2){border-right:none;}
-  }
-
-  .mic-error{
-    padding:14px 20px; font-size:13px; color:var(--danger); font-family:var(--font-mono);
-    border-top:1px solid var(--hair); display:none;
-  }
-  .mic-error.show{display:block;}
-
-  /* ---------- REFERENCE GALLERY ---------- */
-  .ref-grid{
-    grid-column:2;
-    margin-top:36px;
-    display:grid;
-    grid-template-columns:repeat(3, 1fr);
-    gap:1px;
-    background:var(--hair);
-    border:1px solid var(--hair);
-  }
-  @media (max-width:760px){ .ref-grid{grid-column:1; grid-template-columns:1fr;} }
-  .ref-card{background:var(--panel); padding:20px 20px 22px;}
-  .ref-card h4{
-    font-family:var(--font-mono); font-size:12px; color:var(--paper);
-    margin:0 0 4px; font-weight:500;
-  }
-  .ref-card .sub{font-size:11.5px; color:var(--muted-2); margin-bottom:14px;}
-  .ref-card svg{display:block; width:100%; height:70px;}
-  .ref-card p{font-size:13px; color:var(--muted); margin-top:14px;}
-  .ref-note{
-    grid-column:2; margin-top:14px; font-size:12px; color:var(--muted-2); max-width:64ch;
-  }
-  @media (max-width:760px){ .ref-note{grid-column:1;} }
-
-  /* ---------- MODEL CARD ---------- */
-  .card-grid{
-    grid-column:2; margin-top:36px;
-    display:grid; grid-template-columns:1fr 1fr; gap:1px;
-    background:var(--hair); border:1px solid var(--hair);
-  }
-  @media (max-width:760px){ .card-grid{grid-column:1; grid-template-columns:1fr;} }
-  .card-block{background:var(--panel); padding:22px 24px;}
-  .card-block h4{
-    font-family:var(--font-mono); font-size:11.5px; color:var(--muted-2);
-    margin:0 0 12px; font-weight:400;
-  }
-  .card-block ul{margin:0; padding:0; list-style:none;}
-  .card-block li{
-    font-size:13.5px; color:var(--muted); padding:6px 0; border-bottom:1px solid var(--grid);
-    display:flex; justify-content:space-between; gap:10px;
-  }
-  .card-block li:last-child{border-bottom:none;}
-  .card-block li span:last-child{color:var(--paper); font-family:var(--font-mono); font-size:12.5px; text-align:right;}
-  .card-block.wide{grid-column:1/-1;}
-  .card-block.wide p{font-size:13.5px; color:var(--muted); max-width:80ch;}
-
-  /* ---------- EXPORT BUTTON (mic panel) ---------- */
-  .mic-btn.ghost{
-    background:transparent; color:var(--paper); border:1px solid var(--hair);
-  }
-  .mic-btn.ghost:hover{border-color:var(--phosphor-dim); color:var(--phosphor);}
-  .mic-btn.ghost:disabled:hover{border-color:var(--hair); color:var(--paper);}
-
-  /* ---------- FOOTER ---------- */
-  footer{
-    border-top:1px solid var(--hair);
-    padding:52px 0 40px;
-  }
-  .foot-grid{
-    display:grid; grid-template-columns:1.2fr 1fr 1fr; gap:40px;
-  }
-  @media (max-width:700px){ .foot-grid{grid-template-columns:1fr; gap:28px;} }
-  .foot-grid h4{
-    font-family:var(--font-mono); font-size:11.5px; color:var(--muted-2);
-    margin:0 0 12px; font-weight:400;
-  }
-  .foot-grid p, .foot-grid li{font-size:13.5px; color:var(--muted);}
-  .foot-grid ul{list-style:none; margin:0; padding:0;}
-  .foot-grid li{padding:4px 0;}
-  .disclaimer{
-    margin-top:40px; padding-top:24px; border-top:1px solid var(--hair);
-    font-size:12.5px; color:var(--muted-2); max-width:70ch;
-  }
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,Arial,sans-serif;background:#07111f;color:#eaf2ff}
+.container{max-width:1100px;margin:auto;padding:28px 18px}
+.hero{padding:30px;border:1px solid #243650;border-radius:24px;background:linear-gradient(135deg,#0c1c31,#10263f);box-shadow:0 20px 60px #0005}
+h1{font-size:clamp(30px,5vw,52px);margin:0 0 12px}
+h2{margin-top:0}
+p{color:#aebed3;line-height:1.6}
+.badge{display:inline-block;padding:7px 11px;border-radius:999px;background:#123b59;color:#7edcff;font-size:13px;font-weight:700}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:18px}
+.card{background:#0c1929;border:1px solid #22364e;border-radius:20px;padding:20px}
+@media(max-width:760px){.grid{grid-template-columns:1fr}}
+button,.file-label{border:0;border-radius:12px;padding:13px 17px;font-weight:700;cursor:pointer;margin:5px 5px 5px 0}
+.primary{background:#26a9e0;color:#03111c}.danger{background:#ef6262;color:#fff}.secondary,.file-label{background:#1b2c42;color:#dcecff}
+button:disabled{opacity:.45;cursor:not-allowed}
+.status{padding:12px;border-radius:12px;background:#091321;color:#9eb1c7;margin-top:10px}
+.result{margin-top:16px;padding:22px;border-radius:18px;background:#071522;border:1px solid #2a455f;display:none}
+.result .disease{font-size:30px;font-weight:800;margin:8px 0}
+.progress{height:10px;background:#1a2b3c;border-radius:20px;overflow:hidden}.bar{height:100%;width:0;background:#38c6ef;transition:.4s}
+canvas{width:100%;height:180px;background:#050d16;border-radius:12px}
+audio{width:100%;margin-top:10px}
+small{color:#7890a8}
+.notice{border-left:4px solid #e5ad4f;padding:13px 15px;background:#17150e;border-radius:8px;color:#d9c99f}
+table{width:100%;border-collapse:collapse;margin-top:12px}td,th{text-align:left;padding:8px;border-bottom:1px solid #20334a;color:#b9c9db}
+input[type=file]{display:none}
+code{color:#8fe6ff}
 </style>
 </head>
 <body>
+<div class="container">
+<section class="hero">
+<span class="badge">RESPIRATORY SOUND ANALYZER</span>
+<h1>Lung Disease Classifier</h1>
+<p>Record or upload a respiratory sound and analyze its audio signal. If a compatible TensorFlow.js model is installed in <code>model/</code>, this page can run real browser-side inference.</p>
+<div class="notice"><b>Important:</b> This is a research/educational demonstration, not a medical diagnosis. Do not use the result to make treatment decisions.</div>
+</section>
 
-<header class="site">
-  <nav class="nav">
-    <a class="nav-mark" href="#top"><span class="dot"></span>RESP&nbsp;/&nbsp;CNN</a>
-    <ul class="nav-links">
-      <li><a href="#overview">Overview</a></li>
-      <li><a href="#data">Data</a></li>
-      <li><a href="#method">Method</a></li>
-      <li><a href="#results">Results</a></li>
-      <li><a href="#try">Try it</a></li>
-      <li><a href="#reference">Reference</a></li>
-      <li><a href="#modelcard">Model card</a></li>
-    </ul>
-  </nav>
-</header>
+<div class="grid">
+<section class="card">
+<h2>1. Audio input</h2>
+<p>Use a microphone or upload a WAV/MP3/M4A recording.</p>
+<button id="startBtn" class="primary">🎙 Start recording</button>
+<button id="stopBtn" class="danger" disabled>■ Stop</button>
+<label class="file-label">📁 Upload audio<input id="audioFile" type="file" accept="audio/*"></label>
+<div id="status" class="status">Ready.</div>
+<audio id="player" controls></audio>
+</section>
 
-<main id="top">
+<section class="card">
+<h2>2. Signal analysis</h2>
+<canvas id="wave"></canvas>
+<table>
+<tr><th>Duration</th><td id="duration">—</td></tr>
+<tr><th>RMS energy</th><td id="rms">—</td></tr>
+<tr><th>Zero crossing rate</th><td id="zcr">—</td></tr>
+<tr><th>Dominant frequency</th><td id="freq">—</td></tr>
+</table>
+</section>
+</div>
 
-  <!-- ================= HERO ================= -->
-  <section class="hero" style="border-top:none; padding-top:64px;">
-    <div class="wrap">
-      <div class="hero-kicker"><span class="rule"></span>LUNG SOUND CLASSIFIER</div>
-      <h1>Diagnosing lung disease from the sound of a breath.</h1>
-      <p class="sub">
-        A 1D convolutional neural network trained on the <b>ICBHI 2017 Respiratory Sound Database</b>,
-        learning to tell eight respiratory conditions apart directly from breathing-cycle audio —
-        the same signal a clinician listens for through a stethoscope.
-      </p>
+<section class="card" style="margin-top:18px">
+<h2>3. AI prediction</h2>
+<p id="modelStatus">Checking for an AI model…</p>
+<button id="predictBtn" class="primary" disabled>🧠 Analyze audio</button>
+<div id="result" class="result">
+<small>Prediction</small>
+<div class="disease" id="prediction">—</div>
+<div><span id="confidence">0%</span> confidence</div>
+<div class="progress"><div id="bar" class="bar"></div></div>
+<table id="probTable"></table>
+</div>
+</section>
 
-      <div class="stat-row">
-        <div class="stat"><div class="num">98.53%</div><div class="label">accuracy on held-out test audio</div></div>
-        <div class="stat"><div class="num">8</div><div class="label">respiratory conditions classified</div></div>
-        <div class="stat"><div class="num">6,898</div><div class="label">annotated breathing-cycle segments</div></div>
-        <div class="stat"><div class="num">4</div><div class="label">audio features per clip</div></div>
-      </div>
-
-      <div class="wave-box">
-        <div class="scope-head">
-          <span>CH.1 — BREATH AUDIO, RAW WAVEFORM</span>
-          <span>16 kHz</span>
-        </div>
-        <svg viewBox="0 0 1000 220" preserveAspectRatio="none" role="img" aria-label="Stylised waveform of a lung sound recording">
-          <path class="wave-path" d="M0.0,112.1 4.2,96.9 8.4,87.0 12.6,87.1 16.7,83.6 20.9,85.1 25.1,85.4 29.3,106.7 33.5,111.3 37.7,130.4 41.8,134.6 46.0,147.5 50.2,171.0 54.4,160.4 58.6,151.0 62.8,117.0 66.9,97.6 71.1,92.4 75.3,54.3 79.5,57.3 83.7,52.1 87.9,49.0 92.1,86.9 96.2,100.1 100.4,118.0 104.6,132.0 108.8,171.7 113.0,191.4 117.2,194.7 121.3,153.6 125.5,128.3 129.7,109.3 133.9,86.1 138.1,49.7 142.3,46.6 146.4,55.4 150.6,32.2 154.8,37.5 159.0,78.7 163.2,122.7 167.4,145.7 171.5,177.3 175.7,194.0 179.9,192.2 184.1,205.0 188.3,171.0 192.5,136.7 196.7,133.6 200.8,99.8 205.0,44.1 209.2,59.0 213.4,44.2 217.6,26.6 221.8,64.2 225.9,67.0 230.1,66.4 234.3,116.9 238.5,138.1 242.7,151.3 246.9,167.9 251.0,195.5 255.2,203.1 259.4,188.9 263.6,158.2 267.8,123.7 272.0,110.5 276.2,80.0 280.3,64.4 284.5,27.2 288.7,44.1 292.9,49.2 297.1,46.1 301.3,88.5 305.4,133.1 309.6,148.2 313.8,148.8 318.0,199.6 322.2,183.5 326.4,176.2 330.5,148.6 334.7,141.4 338.9,131.3 343.1,88.8 347.3,64.9 351.5,68.7 355.6,25.5 359.8,29.0 364.0,36.4 368.2,57.5 372.4,121.2 376.6,107.4 380.8,103.7 384.9,125.2 389.1,140.9 393.3,177.2 397.5,180.4 401.7,160.9 405.9,142.7 410.0,133.3 414.2,133.1 418.4,88.2 422.6,76.6 426.8,81.0 431.0,68.8 435.1,49.4 439.3,69.3 443.5,70.0 447.7,97.5 451.9,92.8 456.1,123.7 460.3,117.2 464.4,137.8 468.6,87.6 472.8,134.0 477.0,125.8 481.2,125.9 485.4,131.8 489.5,121.1 493.7,102.9 497.9,93.4 502.1,69.6 506.3,71.1 510.5,54.7 514.6,54.5 518.8,71.4 523.0,98.0 527.2,73.2 531.4,128.1 535.6,129.1 539.7,157.6 543.9,161.3 548.1,181.2 552.3,174.2 556.5,146.4 560.7,137.8 564.9,104.6 569.0,93.1 573.2,75.3 577.4,59.8 581.6,47.3 585.8,35.0 590.0,30.3 594.1,58.8 598.3,67.4 602.5,121.3 606.7,149.0 610.9,172.5 615.1,160.3 619.2,197.1 623.4,175.8 627.6,156.6 631.8,167.5 636.0,135.2 640.2,81.1 644.4,90.9 648.5,52.1 652.7,51.3 656.9,15.4 661.1,60.4 665.3,47.1 669.5,96.5 673.6,91.7 677.8,152.9 682.0,182.4 686.2,190.9 690.4,193.2 694.6,172.6 698.7,190.8 702.9,148.5 707.1,142.4 711.3,83.5 715.5,84.3 719.7,36.3 723.8,50.5 728.0,51.4 732.2,45.0 736.4,62.2 740.6,104.0 744.8,122.9 749.0,171.1 753.1,195.9 757.3,196.0 761.5,175.7 765.7,176.1 769.9,191.7 774.1,148.3 778.2,93.5 782.4,68.9 786.6,64.1 790.8,38.5 795.0,21.4 799.2,48.0 803.3,49.1 807.5,83.4 811.7,121.0 815.9,159.3 820.1,187.1 824.3,170.3 828.5,191.5 832.6,150.5 836.8,135.9 841.0,126.5 845.2,91.2 849.4,68.9 853.6,34.1 857.7,44.4 861.9,33.9 866.1,84.7 870.3,87.0 874.5,120.5 878.7,150.0 882.8,165.3 887.0,201.2 891.2,173.1 895.4,156.8 899.6,138.9 903.8,113.7 907.9,109.8 912.1,96.5 916.3,70.0 920.5,59.0 924.7,65.5 928.9,69.0 933.1,88.1 937.2,96.2 941.4,110.5 945.6,120.2 949.8,128.7 954.0,140.4 958.2,140.1 962.3,129.1 966.5,124.5 970.7,110.2 974.9,110.1 979.1,77.6 983.3,70.6 987.4,76.4 991.6,72.4 995.8,80.3 1000.0,96.9" />
-        </svg>
-      </div>
-    </div>
-  </section>
-
-  <!-- ================= OVERVIEW ================= -->
-  <section id="overview">
-    <div class="wrap">
-      <div class="section-head">
-        <div class="tag">Overview</div>
-        <h2>Listening in on the lungs</h2>
-      </div>
-      <div class="section-body">
-        <p>
-          A clinician listening through a stethoscope is trained to pick out crackles, wheezes, and other
-          adventitious sounds that point toward conditions like COPD, pneumonia, or bronchiolitis. It's a skill
-          that takes years to build and still varies from one listener to the next.
-        </p>
-        <p>
-          This project asks a narrower question: can a model learn that same signal directly from the raw
-          audio? It's trained and evaluated on the <b style="color:var(--paper)">ICBHI 2017 Respiratory Sound
-          Database</b>, a public benchmark built from real patient recordings and annotated breathing cycles,
-          and used throughout as the standard test bed for this kind of classification work.
-        </p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ================= DATA ================= -->
-  <section id="data">
-    <div class="wrap">
-      <div class="section-head">
-        <div class="tag">The data</div>
-        <h2>6,898 breathing cycles, badly imbalanced</h2>
-      </div>
-      <div class="section-body">
-        <p>
-          Each recording's annotation file marks the start and end of every breathing cycle, flagged for the
-          presence of crackles or wheezes. Merging those cycles with each patient's diagnosis gives one label
-          per breathing-cycle segment across eight conditions.
-        </p>
-        <p>
-          The distribution is heavily skewed toward COPD, which makes up roughly five out of every six segments
-          in the dataset — a class imbalance that shapes everything downstream, from augmentation strategy to
-          which per-class scores are trustworthy later on.
-        </p>
-      </div>
-
-      <div class="chart-panel">
-        <div class="bar-row">
-          <div class="name">COPD</div>
-          <div class="bar-track"><div class="bar-fill" style="width:100%"></div></div>
-          <div class="count">5,746</div>
-        </div>
-        <div class="bar-row">
-          <div class="name">Healthy</div>
-          <div class="bar-track"><div class="bar-fill" style="width:66.7%"></div></div>
-          <div class="count">322</div>
-        </div>
-        <div class="bar-row">
-          <div class="name">Pneumonia</div>
-          <div class="bar-track"><div class="bar-fill" style="width:65.3%"></div></div>
-          <div class="count">285</div>
-        </div>
-        <div class="bar-row">
-          <div class="name">URTI<span class="full">upper respiratory tract infection</span></div>
-          <div class="bar-track"><div class="bar-fill" style="width:63.5%"></div></div>
-          <div class="count">243</div>
-        </div>
-        <div class="bar-row">
-          <div class="name">Bronchiolitis</div>
-          <div class="bar-track"><div class="bar-fill" style="width:58.6%"></div></div>
-          <div class="count">160</div>
-        </div>
-        <div class="bar-row">
-          <div class="name">Bronchiectasis</div>
-          <div class="bar-track"><div class="bar-fill" style="width:53.7%"></div></div>
-          <div class="count">104</div>
-        </div>
-        <div class="bar-row">
-          <div class="name">LRTI<span class="full">lower respiratory tract infection</span></div>
-          <div class="bar-track"><div class="bar-fill amber" style="width:40.0%"></div></div>
-          <div class="count">32</div>
-        </div>
-        <div class="bar-row">
-          <div class="name">Asthma</div>
-          <div class="bar-track"><div class="bar-fill amber" style="width:20.7%"></div></div>
-          <div class="count">6</div>
-        </div>
-        <div class="chart-foot">BARS ON LOG SCALE — RAW COUNTS SHOWN AT RIGHT · TOTAL 6,898 SEGMENTS</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ================= METHOD ================= -->
-  <section id="method">
-    <div class="wrap">
-      <div class="section-head">
-        <div class="tag">The pipeline</div>
-        <h2>From waveform to diagnosis</h2>
-      </div>
-      <div class="section-body">
-        <p>
-          Six stages turn a raw <code>.wav</code> recording into a predicted diagnosis, moving from audio
-          loading through augmentation, feature extraction, and a convolutional classifier.
-        </p>
-      </div>
-
-      <div class="pipeline">
-        <div class="step">
-          <div class="idx">01</div>
-          <div>
-            <h3>Load and trim</h3>
-            <p>Every clip is loaded with librosa and trimmed to a fixed 2.5-second window (0.6s offset), so
-            every input to the model has the same shape regardless of the original recording length.</p>
-          </div>
-        </div>
-        <div class="step">
-          <div class="idx">02</div>
-          <div>
-            <h3>Augment</h3>
-            <p>Each clip is expanded into three versions — the original, a noise-injected copy, and a
-            time-stretched and pitch-shifted copy — to give the model more variation to learn from and push
-            back against the class imbalance.</p>
-          </div>
-        </div>
-        <div class="step">
-          <div class="idx">03</div>
-          <div>
-            <h3>Extract features</h3>
-            <p>Four descriptors are computed per clip and averaged into a single feature vector: zero-crossing
-            rate, chroma STFT, MFCCs, and RMS energy.</p>
-            <div class="meta">ZCR · CHROMA STFT · MFCC · RMS ENERGY</div>
-          </div>
-        </div>
-        <div class="step">
-          <div class="idx">04</div>
-          <div>
-            <h3>Scale and split</h3>
-            <p>Features are standardized with a StandardScaler, then split 75/25 into training and test sets.</p>
-          </div>
-        </div>
-        <div class="step">
-          <div class="idx">05</div>
-          <div>
-            <h3>Train a 1D CNN</h3>
-            <p>Four Conv1D + max-pooling blocks (256 → 256 → 128 → 64 filters) feed a dense layer with dropout
-            and a softmax head over the eight diagnosis classes.</p>
-            <div class="meta">ADAM · CATEGORICAL CROSS-ENTROPY · 50 EPOCHS · BATCH 64 · REDUCE-LR-ON-PLATEAU</div>
-          </div>
-        </div>
-        <div class="step">
-          <div class="idx">06</div>
-          <div>
-            <h3>Evaluate</h3>
-            <p>The trained model is scored on the held-out test set, with precision, recall, and F1 reported
-            per class to see where it holds up and where it doesn't.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ================= RESULTS ================= -->
-  <section id="results">
-    <div class="wrap">
-      <div class="section-head">
-        <div class="tag">The results</div>
-        <h2>98.53% accuracy on held-out audio</h2>
-      </div>
-
-      <div class="headline-stat">
-        <div class="big">98.53%</div>
-        <div class="desc">test accuracy across 5,174 held-out samples — 0.99 weighted F1, 0.91 macro F1.</div>
-      </div>
-
-      <div class="metrics-panel">
-        <div class="metrics-head">
-          <div>CLASS</div><div>PRECISION</div><div>RECALL</div><div>F1</div><div style="text-align:right;">SUPPORT</div>
-        </div>
-
-        <div class="metrics-row"><div class="cls">COPD</div>
-          <div class="metric-bar"><span style="width:99%"></span></div>
-          <div class="metric-bar"><span style="width:100%"></span></div>
-          <div class="metric-bar"><span style="width:99%"></span></div>
-          <div class="support">4,326</div></div>
-
-        <div class="metrics-row"><div class="cls">Bronchiolitis</div>
-          <div class="metric-bar"><span style="width:96%"></span></div>
-          <div class="metric-bar"><span style="width:98%"></span></div>
-          <div class="metric-bar"><span style="width:97%"></span></div>
-          <div class="support">105</div></div>
-
-        <div class="metrics-row"><div class="cls">URTI</div>
-          <div class="metric-bar"><span style="width:95%"></span></div>
-          <div class="metric-bar"><span style="width:96%"></span></div>
-          <div class="metric-bar"><span style="width:95%"></span></div>
-          <div class="support">187</div></div>
-
-        <div class="metrics-row"><div class="cls">Bronchiectasis</div>
-          <div class="metric-bar"><span style="width:100%"></span></div>
-          <div class="metric-bar"><span style="width:89%"></span></div>
-          <div class="metric-bar"><span style="width:94%"></span></div>
-          <div class="support">84</div></div>
-
-        <div class="metrics-row"><div class="cls">Healthy</div>
-          <div class="metric-bar"><span style="width:95%"></span></div>
-          <div class="metric-bar"><span style="width:91%"></span></div>
-          <div class="metric-bar"><span style="width:93%"></span></div>
-          <div class="support">233</div></div>
-
-        <div class="metrics-row"><div class="cls">Pneumonia</div>
-          <div class="metric-bar"><span style="width:97%"></span></div>
-          <div class="metric-bar"><span style="width:89%"></span></div>
-          <div class="metric-bar"><span style="width:93%"></span></div>
-          <div class="support">217</div></div>
-
-        <div class="metrics-row"><div class="cls rare">LRTI</div>
-          <div class="metric-bar low"><span style="width:87%"></span></div>
-          <div class="metric-bar"><span style="width:100%"></span></div>
-          <div class="metric-bar"><span style="width:93%"></span></div>
-          <div class="support">20</div></div>
-
-        <div class="metrics-row"><div class="cls rare">Asthma</div>
-          <div class="metric-bar"><span style="width:100%"></span></div>
-          <div class="metric-bar low"><span style="width:50%"></span></div>
-          <div class="metric-bar low"><span style="width:67%"></span></div>
-          <div class="support">2</div></div>
-      </div>
-
-      <div class="callout">
-        <b>Macro F1 (0.91) sits well below weighted F1 (0.99)</b> — the gap is the class imbalance showing
-        through. With only 2 Asthma and 20 LRTI examples in the test set, those scores swing hard on a single
-        misclassification, and Asthma's 0.50 recall should be read as "not enough data to know," not "the
-        model struggles with asthma."
-      </div>
-    </div>
-  </section>
-
-  <!-- ================= TRY IT ================= -->
-  <section id="try">
-    <div class="wrap">
-      <div class="section-head">
-        <div class="tag">Try it</div>
-        <h2>Breathe into your mic</h2>
-      </div>
-      <div class="section-body">
-        <p>
-          This runs entirely in your browser: your microphone feeds a live waveform and spectrogram, plus two
-          of the same signal properties the model computes per clip — zero-crossing rate and RMS energy.
-          Nothing is recorded, saved, or sent anywhere.
-        </p>
-      </div>
-
-      <div class="not-diagnosis">
-        <span class="flag">NOT A DIAGNOSIS</span>
-        <p>
-          <b>The trained classifier isn't running here.</b> The notebook this site documents never exported
-          its model weights, and a live "diagnosis" from a laptop mic wouldn't be trustworthy even if it did —
-          this model was evaluated on clinical stethoscope recordings, not consumer microphones, and was never
-          validated for real diagnostic use. What's below is a live look at the signal, not a medical result.
-        </p>
-      </div>
-
-      <div class="mic-panel">
-        <div class="mic-head">
-          <div class="mic-status" id="micStatus"><span class="led"></span><span id="micStatusText">MIC IDLE</span></div>
-          <div>
-            <button class="mic-btn" id="micStart">Start listening</button>
-            <button class="mic-btn stop" id="micStop" style="display:none;">Stop</button>
-            <button class="mic-btn ghost" id="micExport" disabled title="Start listening first">Export session</button>
-          </div>
-        </div>
-
-        <div class="scope-double">
-          <div class="row">
-            <div class="cap">WAVEFORM — TIME DOMAIN</div>
-            <canvas id="waveCanvas"></canvas>
-          </div>
-          <div class="row">
-            <div class="cap">SPECTROGRAM — FREQUENCY DOMAIN</div>
-            <canvas id="specCanvas"></canvas>
-          </div>
-        </div>
-
-        <div class="mic-readouts">
-          <div class="rd"><div class="num" id="rdRms">0.00</div><div class="lbl">RMS energy</div></div>
-          <div class="rd"><div class="num" id="rdZcr">0</div><div class="lbl">zero-crossing rate (per frame)</div></div>
-          <div class="rd"><div class="num" id="rdPeak">0 Hz</div><div class="lbl">dominant frequency</div></div>
-        </div>
-
-        <div class="mic-error" id="micError"></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ================= REFERENCE GALLERY ================= -->
-  <section id="reference">
-    <div class="wrap">
-      <div class="section-head">
-        <div class="tag">Reference</div>
-        <h2>What the model is listening for</h2>
-      </div>
-      <div class="section-body">
-        <p>
-          Crackles and wheezes are the two adventitious sounds the ICBHI annotations flag on every breathing
-          cycle, and they're a big part of what separates the eight diagnosis classes. These are illustrative
-          patterns to build intuition — not real patient recordings, and not your own audio from the panel above.
-        </p>
-      </div>
-
-      <div class="ref-grid">
-        <div class="ref-card">
-          <h4>Normal breath</h4>
-          <div class="sub">smooth, low-frequency, no clicks</div>
-          <svg viewBox="0 0 300 70" preserveAspectRatio="none">
-            <path d="M0,35 C20,20 40,50 60,35 C80,20 100,50 120,35 C140,22 160,48 180,35 C200,21 220,49 240,35 C260,22 280,48 300,35" fill="none" stroke="#8FEFC7" stroke-width="1.6"/>
-          </svg>
-          <p>A steady rise and fall in amplitude with no sharp transients — the envelope of ordinary inhale/exhale.</p>
-        </div>
-        <div class="ref-card">
-          <h4>Wheeze</h4>
-          <div class="sub">sustained, high-pitched, whistle-like</div>
-          <svg viewBox="0 0 300 70" preserveAspectRatio="none">
-            <path d="M0,40 C10,10 20,60 30,40 C40,12 50,58 60,40 C70,11 80,59 90,40 C100,10 110,60 120,40 C130,12 140,58 150,40 C160,11 170,59 180,40 C190,10 200,60 210,40 C220,12 230,58 240,40 C250,11 260,59 270,40 C280,10 290,60 300,40" fill="none" stroke="#E7A94C" stroke-width="1.6"/>
-          </svg>
-          <p>A tight, near-continuous high-frequency oscillation — shows up as a bright, narrow band on a spectrogram.</p>
-        </div>
-        <div class="ref-card">
-          <h4>Crackle</h4>
-          <div class="sub">brief, sharp clicks during inhale</div>
-          <svg viewBox="0 0 300 70" preserveAspectRatio="none">
-            <path d="M0,35 L40,35 L44,8 L47,58 L50,35 L120,35 L124,12 L127,55 L130,35 L200,35 L204,10 L207,57 L210,35 L280,35 L284,14 L287,52 L290,35 L300,35" fill="none" stroke="#E0765E" stroke-width="1.6"/>
-          </svg>
-          <p>Short, irregular spikes on top of an otherwise quiet baseline — brief pops rather than sustained tones.</p>
-        </div>
-      </div>
-      <div class="ref-note">Illustrative waveforms drawn for teaching purposes, not derived from patient data.</div>
-    </div>
-  </section>
-
-  <!-- ================= MODEL CARD ================= -->
-  <section id="modelcard">
-    <div class="wrap">
-      <div class="section-head">
-        <div class="tag">Model card</div>
-        <h2>What this model is — and isn't</h2>
-      </div>
-
-      <div class="card-grid">
-        <div class="card-block">
-          <h4>INTENDED USE</h4>
-          <ul>
-            <li><span>Primary use</span><span>Research / education</span></li>
-            <li><span>Out of scope</span><span>Clinical diagnosis</span></li>
-            <li><span>Input expected</span><span>Stethoscope-recorded audio</span></li>
-            <li><span>Not validated for</span><span>Consumer mic input</span></li>
-          </ul>
-        </div>
-        <div class="card-block">
-          <h4>TRAINING DATA</h4>
-          <ul>
-            <li><span>Source</span><span>ICBHI 2017 Challenge</span></li>
-            <li><span>Segments</span><span>6,898 breathing cycles</span></li>
-            <li><span>Classes</span><span>8 diagnoses</span></li>
-            <li><span>Class balance</span><span>Heavily skewed to COPD</span></li>
-          </ul>
-        </div>
-        <div class="card-block">
-          <h4>REPORTED PERFORMANCE</h4>
-          <ul>
-            <li><span>Test accuracy</span><span>98.53%</span></li>
-            <li><span>Weighted F1</span><span>0.99</span></li>
-            <li><span>Macro F1</span><span>0.91</span></li>
-            <li><span>Weakest class</span><span>Asthma (n=2 test)</span></li>
-          </ul>
-        </div>
-        <div class="card-block">
-          <h4>KNOWN LIMITATIONS</h4>
-          <ul>
-            <li><span>Rare classes</span><span>Untrustworthy scores</span></li>
-            <li><span>External validity</span><span>Single-dataset, unverified</span></li>
-            <li><span>Recording conditions</span><span>Clinical mic only</span></li>
-            <li><span>Deployment</span><span>Not exported / not live</span></li>
-          </ul>
-        </div>
-        <div class="card-block wide">
-          <h4>SUMMARY</h4>
-          <p>
-            High headline accuracy on this benchmark comes largely from the dominant COPD class. Scores on
-            rare conditions (Asthma, LRTI) are built on a handful of test examples and shouldn't be read as
-            reliable performance claims. This model has not been evaluated on external data, on consumer
-            hardware, or against clinician-level baselines, and was never intended to inform real diagnostic
-            decisions.
-          </p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-</main>
-
-<footer>
-  <div class="wrap">
-    <div class="foot-grid">
-      <div>
-        <h4>DATASET</h4>
-        <p>ICBHI 2017 Respiratory Sound Database — patient recordings and breathing-cycle annotations
-        released for the ICBHI 2017 Challenge, covering eight diagnosis labels.</p>
-      </div>
-      <div>
-        <h4>STACK</h4>
-        <ul>
-          <li>librosa · audio loading &amp; features</li>
-          <li>scikit-learn · scaling &amp; splits</li>
-          <li>TensorFlow / Keras · 1D CNN</li>
-          <li>pandas · Plotly · dataset EDA</li>
-        </ul>
-      </div>
-      <div>
-        <h4>MODEL</h4>
-        <ul>
-          <li>4× Conv1D + MaxPooling</li>
-          <li>Dropout regularization</li>
-          <li>Dense softmax, 8 classes</li>
-          <li>50 epochs, batch size 64</li>
-        </ul>
-      </div>
-    </div>
-
-    <div class="disclaimer">
-      This is a research and learning project built on a public benchmark dataset — it is not a medical
-      device and isn't validated for clinical use. Diagnosis of respiratory disease should always involve a
-      qualified clinician.
-    </div>
-  </div>
-</footer>
+<section class="card" style="margin-top:18px">
+<h2>How to enable real AI predictions</h2>
+<p>This HTML file is designed so you can later add a TensorFlow.js model without rebuilding the website. Put a converted model at:</p>
+<p><code>model/model.json</code> and its corresponding <code>.bin</code> weight file(s).</p>
+<p>The model must be trained for the exact input representation used by its JavaScript preprocessing. A model file alone is not enough if its scaler, feature order, or preprocessing pipeline is different.</p>
+<p><small>TensorFlow.js loads browser models with <code>tf.loadLayersModel()</code>; converted Keras models use TensorFlow.js's model format.</small></p>
+</section>
+</div>
 
 <script>
-(function(){
-  const startBtn = document.getElementById('micStart');
-  const stopBtn = document.getElementById('micStop');
-  const statusEl = document.getElementById('micStatus');
-  const statusText = document.getElementById('micStatusText');
-  const errorEl = document.getElementById('micError');
-  const waveCanvas = document.getElementById('waveCanvas');
-  const specCanvas = document.getElementById('specCanvas');
-  const rdRms = document.getElementById('rdRms');
-  const rdZcr = document.getElementById('rdZcr');
-  const rdPeak = document.getElementById('rdPeak');
-  const exportBtn = document.getElementById('micExport');
+const CLASSES=["COPD","Healthy","Pneumonia","URTI","Bronchiolitis","Bronchiectasis","LRTI","Asthma"];
+let audioContext=null, mediaStream=null, recorder=null, chunks=[];
+let currentBlob=null, currentAudioBuffer=null, model=null;
 
-  let audioCtx, analyser, source, stream, rafId;
-  let sessionLog = [];
-  let sessionStartedAt = null;
-  let lastLogTime = 0;
+const $=id=>document.getElementById(id);
+const status=t=>$("status").textContent=t;
 
-  function exportSession(){
-    if(sessionLog.length === 0) return;
-    const payload = {
-      note: "Live signal readouts from the browser mic demo. Not a diagnosis — see the model card / not-a-diagnosis notice on the page this was exported from.",
-      started_at: sessionStartedAt,
-      exported_at: new Date().toISOString(),
-      sample_count: sessionLog.length,
-      samples: sessionLog
+async function initModel(){
+  try{
+    model=await tf.loadLayersModel("./model/model.json");
+    $("modelStatus").innerHTML="✅ AI model loaded. <b>Analyze audio</b> is ready.";
+    $("predictBtn").disabled=!currentAudioBuffer;
+  }catch(e){
+    $("modelStatus").innerHTML="⚠️ No TensorFlow.js model found in <code>model/model.json</code>. Audio analysis works, but disease prediction is disabled until a real trained model is added.";
+  }
+}
+
+function drawWave(data){
+  const c=$("wave"),ctx=c.getContext("2d"),dpr=devicePixelRatio||1;
+  c.width=c.clientWidth*dpr;c.height=c.clientHeight*dpr;ctx.scale(dpr,dpr);
+  const w=c.clientWidth,h=c.clientHeight;
+  ctx.clearRect(0,0,w,h);ctx.beginPath();
+  const step=Math.max(1,Math.floor(data.length/w));
+  for(let x=0;x<w;x++){
+    const i=Math.min(data.length-1,x*step);
+    const y=h/2-data[i]*h*.42;
+    x?ctx.lineTo(x,y):ctx.moveTo(x,y);
+  }
+  ctx.strokeStyle="#38c6ef";ctx.lineWidth=1.5;ctx.stroke();
+}
+
+function analyzeSamples(samples,sr){
+  let sum=0,z=0;
+  for(let i=0;i<samples.length;i++){
+    sum+=samples[i]*samples[i];
+    if(i&&((samples[i]>=0)!==(samples[i-1]>=0)))z++;
+  }
+  const rms=Math.sqrt(sum/samples.length);
+  const zcr=z/Math.max(1,samples.length-1);
+  let crossings=[];
+  for(let i=1;i<samples.length;i++){
+    if(samples[i-1]<=0&&samples[i]>0)crossings.push(i);
+  }
+  let f=0;
+  if(crossings.length>1){
+    const periods=[];
+    for(let i=1;i<crossings.length;i++)periods.push(crossings[i]-crossings[i-1]);
+    const p=periods.reduce((a,b)=>a+b,0)/periods.length;
+    if(p>0)f=sr/p;
+  }
+  $("rms").textContent=rms.toFixed(5);
+  $("zcr").textContent=zcr.toFixed(4);
+  $("freq").textContent=f?f.toFixed(1)+" Hz":"—";
+  $("duration").textContent=(samples.length/sr).toFixed(2)+" s";
+  drawWave(samples.filter((_,i)=>i%Math.max(1,Math.floor(samples.length/4000))===0));
+}
+
+async function decodeBlob(blob){
+  currentBlob=blob;
+  const url=URL.createObjectURL(blob);
+  $("player").src=url;
+  if(!audioContext)audioContext=new (window.AudioContext||window.webkitAudioContext)();
+  const arr=await blob.arrayBuffer();
+  currentAudioBuffer=await audioContext.decodeAudioData(arr.slice(0));
+  const ch=currentAudioBuffer.getChannelData(0);
+  analyzeSamples(ch,currentAudioBuffer.sampleRate);
+  $("predictBtn").disabled=!model;
+  status("Audio loaded. Press Analyze audio.");
+}
+
+$("startBtn").onclick=async()=>{
+  try{
+    mediaStream=await navigator.mediaDevices.getUserMedia({audio:true});
+    recorder=new MediaRecorder(mediaStream);
+    chunks=[];
+    recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
+    recorder.onstop=async()=>{
+      mediaStream.getTracks().forEach(t=>t.stop());
+      const blob=new Blob(chunks,{type:recorder.mimeType||"audio/webm"});
+      await decodeBlob(blob);
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'breath-session-' + Date.now() + '.json';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    recorder.start();
+    $("startBtn").disabled=true;$("stopBtn").disabled=false;
+    status("Recording… breathe normally and keep the microphone steady.");
+  }catch(e){status("Microphone error: "+e.message)}
+};
+
+$("stopBtn").onclick=()=>{
+  if(recorder&&recorder.state!=="inactive"){
+    recorder.stop();$("stopBtn").disabled=true;$("startBtn").disabled=false;
+    status("Processing recording…");
   }
-  exportBtn.addEventListener('click', exportSession);
+};
 
-  function sizeCanvas(cv){
-    const dpr = window.devicePixelRatio || 1;
-    const rect = cv.getBoundingClientRect();
-    cv.width = Math.max(1, rect.width * dpr);
-    cv.height = Math.max(1, rect.height * dpr);
-    const ctx = cv.getContext('2d');
-    ctx.setTransform(dpr,0,0,dpr,0,0);
-    return ctx;
+$("audioFile").onchange=async e=>{
+  const file=e.target.files[0];
+  if(!file)return;
+  status("Loading audio…");
+  try{await decodeBlob(file);status("Audio loaded.")}
+  catch(err){status("Could not decode this audio file: "+err.message)}
+};
+
+function softmax(arr){
+  const m=Math.max(...arr), ex=arr.map(x=>Math.exp(x-m)),s=ex.reduce((a,b)=>a+b,0);
+  return ex.map(x=>x/s);
+}
+
+async function predict(){
+  if(!model||!currentAudioBuffer)return;
+  $("predictBtn").disabled=true;
+  $("prediction").textContent="Analyzing…";
+  $("result").style.display="block";
+  try{
+    /*
+      IMPORTANT:
+      The exact input shape/preprocessing depends on the trained model.
+      This generic adapter supports models whose input is a fixed 1-D audio
+      waveform. If your model expects MFCC/chroma/RMS/ZCR features, replace
+      prepareModelInput() with the exact training pipeline.
+    */
+    const input=prepareModelInput(currentAudioBuffer,model.inputs[0].shape);
+    const out=model.predict(input);
+    const tensor=Array.isArray(out)?out[0]:out;
+    const raw=Array.from(await tensor.data());
+    tf.dispose([input,out]);
+    const probs=softmax(raw);
+    const best=probs.indexOf(Math.max(...probs));
+    const label=CLASSES[best]||("Class "+best);
+    const conf=probs[best]*100;
+    $("prediction").textContent=label;
+    $("confidence").textContent=conf.toFixed(1)+"%";
+    $("bar").style.width=conf+"%";
+    $("probTable").innerHTML="<tr><th>Class</th><th>Probability</th></tr>"+
+      probs.map((p,i)=>`<tr><td>${CLASSES[i]||"Class "+i}</td><td>${(p*100).toFixed(2)}%</td></tr>`).join("");
+  }catch(e){
+    $("prediction").textContent="Model input mismatch";
+    $("confidence").textContent="—";
+    $("bar").style.width="0";
+    $("probTable").innerHTML="<tr><td colspan='2'>"+escapeHtml(e.message)+"</td></tr>";
+  }finally{$("predictBtn").disabled=false}
+}
+
+/* Generic waveform adapter. Replace this only when the actual trained model
+   requires a feature vector such as MFCC/chroma/RMS/ZCR. */
+function prepareModelInput(buffer,shape){
+  const expected=shape.slice(1).filter(x=>x!=null);
+  if(expected.length!==1)throw new Error("This model expects a feature tensor, not raw audio. Its training preprocessing must be added here.");
+  const n=expected[0],src=buffer.getChannelData(0),x=new Float32Array(n);
+  for(let i=0;i<n;i++){
+    const pos=Math.floor(i*(src.length-1)/Math.max(1,n-1));
+    x[i]=src[pos];
   }
+  return tf.tensor(x,[1,n,1]);
+}
 
-  function setStatus(live, text){
-    statusEl.classList.toggle('live', live);
-    statusText.textContent = text;
-  }
+$("predictBtn").onclick=predict;
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]))}
 
-  function showError(msg){
-    errorEl.textContent = msg;
-    errorEl.classList.add('show');
-  }
-  function clearError(){
-    errorEl.classList.remove('show');
-    errorEl.textContent = '';
-  }
-
-  async function start(){
-    clearError();
-    startBtn.disabled = true;
-    try{
-      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation:false, noiseSuppression:false, autoGainControl:false } });
-    }catch(err){
-      startBtn.disabled = false;
-      showError('Could not access the microphone (' + (err && err.name ? err.name : 'unknown error') + '). Check your browser\'s mic permission for this page.');
-      return;
-    }
-
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    source = audioCtx.createMediaStreamSource(stream);
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 2048;
-    analyser.smoothingTimeConstant = 0.75;
-    source.connect(analyser);
-
-    const waveCtx = sizeCanvas(waveCanvas);
-    const specCtx = sizeCanvas(specCanvas);
-    specCtx.fillStyle = '#0A1512';
-    specCtx.fillRect(0,0,specCanvas.getBoundingClientRect().width, specCanvas.getBoundingClientRect().height);
-
-    const timeData = new Uint8Array(analyser.fftSize);
-    const freqData = new Uint8Array(analyser.frequencyBinCount);
-
-    startBtn.style.display = 'none';
-    stopBtn.style.display = 'inline-block';
-    startBtn.disabled = false;
-    setStatus(true, 'LISTENING');
-    sessionLog = [];
-    sessionStartedAt = new Date().toISOString();
-    lastLogTime = 0;
-    exportBtn.disabled = true;
-    exportBtn.title = 'Recording — export available once you stop';
-
-    function frame(){
-      analyser.getByteTimeDomainData(timeData);
-      analyser.getByteFrequencyData(freqData);
-
-      // ---- waveform ----
-      const w = waveCanvas.getBoundingClientRect().width;
-      const h = waveCanvas.getBoundingClientRect().height;
-      waveCtx.clearRect(0,0,w,h);
-      waveCtx.beginPath();
-      waveCtx.lineWidth = 1.6;
-      waveCtx.strokeStyle = '#8FEFC7';
-      waveCtx.shadowColor = 'rgba(143,239,199,0.5)';
-      waveCtx.shadowBlur = 6;
-      const step = timeData.length / w;
-      let rmsSum = 0, zcr = 0, prevSign = null;
-      for(let x=0; x<w; x++){
-        const i = Math.floor(x*step);
-        const v = (timeData[i]-128)/128;
-        rmsSum += v*v;
-        const sign = v >= 0;
-        if(prevSign !== null && sign !== prevSign) zcr++;
-        prevSign = sign;
-        const y = h/2 - v*(h/2-4);
-        if(x===0) waveCtx.moveTo(x,y); else waveCtx.lineTo(x,y);
-      }
-      waveCtx.stroke();
-      const rms = Math.sqrt(rmsSum/w);
-
-      // ---- spectrogram (scrolling) ----
-      const sw = specCanvas.getBoundingClientRect().width;
-      const sh = specCanvas.getBoundingClientRect().height;
-      const imgData = specCtx.getImageData(1,0,sw-1,sh);
-      specCtx.putImageData(imgData,0,0);
-      const bins = freqData.length;
-      let peakBin = 0, peakVal = 0;
-      for(let y=0; y<sh; y++){
-        const bin = Math.floor((1 - y/sh) * bins * 0.5); // show lower half of spectrum, most breath energy
-        const mag = freqData[bin] || 0;
-        if(mag > peakVal){ peakVal = mag; peakBin = bin; }
-        const t = mag/255;
-        // phosphor green ramp on near-black
-        const r = Math.floor(10 + t*40);
-        const g = Math.floor(20 + t*220);
-        const b = Math.floor(18 + t*150);
-        specCtx.fillStyle = 'rgb('+r+','+g+','+b+')';
-        specCtx.fillRect(sw-1, y, 1, 1);
-      }
-
-      const nyquist = audioCtx.sampleRate/2;
-      const peakHz = Math.round((peakBin/bins) * nyquist);
-
-      rdRms.textContent = rms.toFixed(2);
-      rdZcr.textContent = zcr;
-      rdPeak.textContent = (peakVal > 15 ? peakHz.toLocaleString() : '—') + (peakVal > 15 ? ' Hz' : '');
-
-      const now = performance.now();
-      if(now - lastLogTime > 200){ // ~5 samples/sec, keeps exported files small
-        sessionLog.push({
-          t_ms: Math.round(now - (sessionLog.length ? 0 : 0)),
-          rms: Number(rms.toFixed(4)),
-          zcr: zcr,
-          dominant_hz: peakVal > 15 ? peakHz : null
-        });
-        lastLogTime = now;
-        if(sessionLog.length > 3000) sessionLog.shift(); // cap memory for long sessions
-      }
-
-      rafId = requestAnimationFrame(frame);
-    }
-    frame();
-  }
-
-  function stop(){
-    if(rafId) cancelAnimationFrame(rafId);
-    if(source) try{ source.disconnect(); }catch(e){}
-    if(audioCtx) try{ audioCtx.close(); }catch(e){}
-    if(stream) stream.getTracks().forEach(t => t.stop());
-    startBtn.style.display = 'inline-block';
-    stopBtn.style.display = 'none';
-    setStatus(false, 'MIC IDLE');
-    rdRms.textContent = '0.00';
-    rdZcr.textContent = '0';
-    rdPeak.textContent = '0 Hz';
-    if(sessionLog.length > 0){
-      exportBtn.disabled = false;
-      exportBtn.title = 'Download this session as JSON';
-    }
-  }
-
-  startBtn.addEventListener('click', start);
-  stopBtn.addEventListener('click', stop);
-
-  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-    startBtn.disabled = true;
-    showError('This browser does not support microphone access (getUserMedia unavailable).');
-  }
-})();
+initModel();
 </script>
 </body>
 </html>
