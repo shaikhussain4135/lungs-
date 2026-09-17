@@ -89,28 +89,60 @@ code{color:#8fe6ff}
 
 <script>
 const CLASSES=["COPD","Healthy","Pneumonia","URTI","Bronchiolitis","Bronchiectasis","LRTI","Asthma"];
-let audioContext=null, mediaStream=null, recorder=null, chunks=[];
-let currentBlob=null, currentAudioBuffer=null, model=null;
+
+let audioContext=null, mediaStream=null, sourceNode=null;
+let processorNode=null, monitorGain=null, workletURL=null;
+let recordedChunks=[], recording=false, currentBlob=null;
+let currentAudioBuffer=null, model=null;
 
 const $=id=>document.getElementById(id);
-const status=t=>$("status").textContent=t;
+const setStatus=m=>{if($("status"))$("status").textContent=m;};
+
+function escapeHtml(v){return String(v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+
+(function(){
+  const ua=navigator.userAgent||"";
+  const device=/iPhone|iPad|iPod/i.test(ua)?"iPhone/iPad":
+    /Android/i.test(ua)?"Android":
+    /Macintosh|Mac OS X/i.test(ua)?"Mac":
+    /Windows/i.test(ua)?"Windows":
+    /Linux/i.test(ua)?"Linux":"Computer";
+  const browser=/Edg\//i.test(ua)?"Edge":
+    /Firefox|FxiOS/i.test(ua)?"Firefox":
+    /CriOS|Chrome/i.test(ua)?"Chrome":
+    /Safari/i.test(ua)?"Safari":"Browser";
+  if($("deviceStatus"))$("deviceStatus").textContent=device+" • "+browser;
+})();
+
+async function getAudioContext(){
+  if(!audioContext){
+    const AC=window.AudioContext||window.webkitAudioContext;
+    if(!AC)throw new Error("Web Audio is not supported by this browser.");
+    audioContext=new AC({latencyHint:"interactive"});
+  }
+  if(audioContext.state==="suspended")await audioContext.resume();
+  return audioContext;
+}
 
 async function initModel(){
   try{
+    if(!window.tf)throw new Error("TensorFlow.js unavailable");
     model=await tf.loadLayersModel("./model/model.json");
-    $("modelStatus").innerHTML="✅ AI model loaded. <b>Analyze audio</b> is ready.";
+    if($("modelStatus"))$("modelStatus").innerHTML="✅ AI model loaded. <b>Analyze audio</b> is ready.";
     $("predictBtn").disabled=!currentAudioBuffer;
   }catch(e){
-    $("modelStatus").innerHTML="⚠️ No TensorFlow.js model found in <code>model/model.json</code>. Audio analysis works, but disease prediction is disabled until a real trained model is added.";
+    if($("modelStatus"))$("modelStatus").innerHTML="⚠️ No trained model found at <code>model/model.json</code>. Recording and audio analysis are available.";
   }
 }
 
 function drawWave(data){
-  const c=$("wave"),ctx=c.getContext("2d"),dpr=devicePixelRatio||1;
-  c.width=c.clientWidth*dpr;c.height=c.clientHeight*dpr;ctx.scale(dpr,dpr);
-  const w=c.clientWidth,h=c.clientHeight;
-  ctx.clearRect(0,0,w,h);ctx.beginPath();
-  const step=Math.max(1,Math.floor(data.length/w));
+  const c=$("wave"); if(!c)return;
+  const ctx=c.getContext("2d"),dpr=devicePixelRatio||1;
+  const w=c.clientWidth||600,h=c.clientHeight||220;
+  c.width=Math.max(1,w*dpr);c.height=Math.max(1,h*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
+  ctx.beginPath();
+  const step=Math.max(1,Math.floor(data.length/Math.max(1,w)));
   for(let x=0;x<w;x++){
     const i=Math.min(data.length-1,x*step);
     const y=h/2-data[i]*h*.42;
@@ -120,140 +152,162 @@ function drawWave(data){
 }
 
 function analyzeSamples(samples,sr){
+  if(!samples?.length)return;
   let sum=0,z=0;
   for(let i=0;i<samples.length;i++){
     sum+=samples[i]*samples[i];
     if(i&&((samples[i]>=0)!==(samples[i-1]>=0)))z++;
   }
-  const rms=Math.sqrt(sum/samples.length);
-  const zcr=z/Math.max(1,samples.length-1);
-  let crossings=[];
-  for(let i=1;i<samples.length;i++){
-    if(samples[i-1]<=0&&samples[i]>0)crossings.push(i);
-  }
+  const rms=Math.sqrt(sum/samples.length),zcr=z/Math.max(1,samples.length-1);
+  const crossings=[];
+  for(let i=1;i<samples.length;i++)if(samples[i-1]<=0&&samples[i]>0)crossings.push(i);
   let f=0;
   if(crossings.length>1){
-    const periods=[];
-    for(let i=1;i<crossings.length;i++)periods.push(crossings[i]-crossings[i-1]);
-    const p=periods.reduce((a,b)=>a+b,0)/periods.length;
+    let total=0;
+    for(let i=1;i<crossings.length;i++)total+=crossings[i]-crossings[i-1];
+    const p=total/(crossings.length-1);
     if(p>0)f=sr/p;
   }
-  $("rms").textContent=rms.toFixed(5);
-  $("zcr").textContent=zcr.toFixed(4);
-  $("freq").textContent=f?f.toFixed(1)+" Hz":"—";
-  $("duration").textContent=(samples.length/sr).toFixed(2)+" s";
-  drawWave(samples.filter((_,i)=>i%Math.max(1,Math.floor(samples.length/4000))===0));
+  if($("rms"))$("rms").textContent=rms.toFixed(5);
+  if($("zcr"))$("zcr").textContent=zcr.toFixed(4);
+  if($("freq"))$("freq").textContent=f?f.toFixed(1)+" Hz":"—";
+  if($("duration"))$("duration").textContent=(samples.length/sr).toFixed(2)+" s";
+  const stride=Math.max(1,Math.floor(samples.length/4000)),display=[];
+  for(let i=0;i<samples.length;i+=stride)display.push(samples[i]);
+  drawWave(display);
+}
+
+function encodeWav(samples,sr){
+  const buffer=new ArrayBuffer(44+samples.length*2),view=new DataView(buffer);
+  const ws=(o,s)=>{for(let i=0;i<s.length;i++)view.setUint8(o+i,s.charCodeAt(i));};
+  ws(0,"RIFF");view.setUint32(4,36+samples.length*2,true);ws(8,"WAVE");
+  ws(12,"fmt ");view.setUint32(16,16,true);view.setUint16(20,1,true);
+  view.setUint16(22,1,true);view.setUint32(24,sr,true);
+  view.setUint32(28,sr*2,true);view.setUint16(32,2,true);view.setUint16(34,16,true);
+  ws(36,"data");view.setUint32(40,samples.length*2,true);
+  let o=44;
+  for(const x of samples){const s=Math.max(-1,Math.min(1,x));view.setInt16(o,s<0?s*0x8000:s*0x7fff,true);o+=2;}
+  return new Blob([view],{type:"audio/wav"});
 }
 
 async function decodeBlob(blob){
+  if(!blob||!blob.size)throw new Error("The audio file is empty.");
   currentBlob=blob;
   const url=URL.createObjectURL(blob);
-  $("player").src=url;
-  if(!audioContext)audioContext=new (window.AudioContext||window.webkitAudioContext)();
-  const arr=await blob.arrayBuffer();
-  currentAudioBuffer=await audioContext.decodeAudioData(arr.slice(0));
-  const ch=currentAudioBuffer.getChannelData(0);
-  analyzeSamples(ch,currentAudioBuffer.sampleRate);
-  $("predictBtn").disabled=!model;
-  status("Audio loaded. Press Analyze audio.");
+  if($("player")){$("player").src=url;$("player").load();}
+  const ctx=await getAudioContext();
+  currentAudioBuffer=await ctx.decodeAudioData((await blob.arrayBuffer()).slice(0));
+  analyzeSamples(currentAudioBuffer.getChannelData(0),currentAudioBuffer.sampleRate);
+  if($("predictBtn"))$("predictBtn").disabled=!model;
+  setStatus("✅ Audio loaded. Signal analysis is ready.");
 }
 
-function pickMimeType(){
-  const types=["audio/mp4","audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus"];
-  return types.find(t=>window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
+async function createWorklet(ctx){
+  if(!ctx.audioWorklet)return null;
+  const code=`class P extends AudioWorkletProcessor{process(i){if(i[0]?.[0]?.length)this.port.postMessage(new Float32Array(i[0][0]));return true}}registerProcessor("universal-pcm",P);`;
+  workletURL=URL.createObjectURL(new Blob([code],{type:"application/javascript"}));
+  try{
+    await ctx.audioWorklet.addModule(workletURL);
+    const n=new AudioWorkletNode(ctx,"universal-pcm",{numberOfInputs:1,numberOfOutputs:1,channelCount:1});
+    n.port.onmessage=e=>{if(recording)recordedChunks.push(new Float32Array(e.data));};
+    return n;
+  }catch(e){return null;}
+}
+
+async function startRecording(){
+  if(recording)return;
+  if(!window.isSecureContext)throw new Error("Microphone access requires HTTPS. Use your GitHub Pages https:// address.");
+  if(!navigator.mediaDevices?.getUserMedia)throw new Error("Microphone access is not supported. Use Safari, Chrome, Edge or Firefox.");
+  setStatus("Requesting microphone permission…");
+  mediaStream=await navigator.mediaDevices.getUserMedia({
+    audio:{channelCount:{ideal:1},echoCancellation:false,noiseSuppression:false,autoGainControl:false}
+  });
+  const ctx=await getAudioContext();
+  sourceNode=ctx.createMediaStreamSource(mediaStream);
+  processorNode=await createWorklet(ctx);
+  if(!processorNode){
+    if(!ctx.createScriptProcessor)throw new Error("This browser has no compatible audio processor.");
+    processorNode=ctx.createScriptProcessor(4096,1,1);
+    processorNode.onaudioprocess=e=>{if(recording)recordedChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));};
+  }
+  monitorGain=ctx.createGain();monitorGain.gain.value=0;
+  recordedChunks=[];recording=true;
+  processorNode.connect(monitorGain);monitorGain.connect(ctx.destination);sourceNode.connect(processorNode);
+  $("startBtn").disabled=true;$("stopBtn").disabled=false;
+  setStatus("🔴 Recording… breathe normally for 5–10 seconds, then press Stop.");
+}
+
+async function stopRecording(){
+  if(!recording)return;
+  recording=false;$("stopBtn").disabled=true;setStatus("Processing recording…");
+  try{
+    await new Promise(r=>setTimeout(r,150));
+    try{processorNode?.disconnect();}catch(_){}
+    try{sourceNode?.disconnect();}catch(_){}
+    try{monitorGain?.disconnect();}catch(_){}
+    mediaStream?.getTracks().forEach(t=>t.stop());
+    const total=recordedChunks.reduce((n,a)=>n+a.length,0);
+    if(total<1000)throw new Error("No microphone audio was captured. Allow microphone permission and try again.");
+    const samples=new Float32Array(total);let o=0;
+    for(const chunk of recordedChunks){samples.set(chunk,o);o+=chunk.length;}
+    await decodeBlob(encodeWav(samples,audioContext.sampleRate));
+    setStatus("✅ Recording complete. WAV audio is ready.");
+  }catch(e){
+    console.error(e);setStatus("❌ "+(e.message||"Could not process the recording."));
+  }finally{
+    recordedChunks=[];mediaStream=null;sourceNode=null;processorNode=null;monitorGain=null;
+    if(workletURL){URL.revokeObjectURL(workletURL);workletURL=null;}
+    $("startBtn").disabled=false;$("stopBtn").disabled=true;
+  }
 }
 
 $("startBtn").onclick=async()=>{
-  try{
-    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)
-      throw new Error("Microphone recording is not supported by this browser.");
-
-    mediaStream=await navigator.mediaDevices.getUserMedia({
-      audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}
-    });
-
-    const mime=pickMimeType();
-    recorder=mime ? new MediaRecorder(mediaStream,{mimeType:mime}) : new MediaRecorder(mediaStream);
-    chunks=[];
-
-    recorder.ondataavailable=e=>{if(e.data && e.data.size)chunks.push(e.data)};
-    recorder.onerror=()=>{
-      status("❌ Recording error. Please try again.");
-      $("startBtn").disabled=false;
-      $("stopBtn").disabled=true;
-    };
-
-    recorder.onstop=async()=>{
-      try{
-        mediaStream.getTracks().forEach(t=>t.stop());
-        const type=recorder.mimeType || mime || "audio/mp4";
-        const blob=new Blob(chunks,{type});
-        if(!blob.size) throw new Error("No audio was captured.");
-        await decodeBlob(blob);
-        status("✅ Recording complete. Audio analysis is ready.");
-      }catch(err){
-        console.error(err);
-        status("❌ Could not process the recording. Please try uploading a WAV file instead.");
-      }
-    };
-
-    recorder.start(250);
-    $("startBtn").disabled=true;
-    $("stopBtn").disabled=false;
-    status("🔴 Recording… breathe normally for 5–10 seconds, then press Stop.");
-  }catch(e){
-    console.error(e);
-    status("❌ Microphone error: "+e.message);
-    $("startBtn").disabled=false;
-    $("stopBtn").disabled=true;
+  try{await startRecording();}
+  catch(e){
+    mediaStream?.getTracks().forEach(t=>t.stop());mediaStream=null;
+    $("startBtn").disabled=false;$("stopBtn").disabled=true;
+    let m=e.message||"Microphone could not be started.";
+    if(e.name==="NotAllowedError")m="Microphone permission was denied. Allow microphone access and try again.";
+    if(e.name==="NotFoundError")m="No microphone was found on this device.";
+    if(e.name==="NotReadableError")m="The microphone is busy or unavailable. Close other apps using it and try again.";
+    setStatus("❌ "+m);
   }
 };
 
-$("stopBtn").onclick=()=>{
-  if(recorder && recorder.state!=="inactive"){
-    status("Processing recording…");
-    $("stopBtn").disabled=true;
-    recorder.stop();
-  }
-};
+$("stopBtn").onclick=stopRecording;
 
 $("audioFile").onchange=async e=>{
-  const file=e.target.files[0];
-  if(!file)return;
-  status("Loading audio…");
-  try{
-    await decodeBlob(file);
-    status("✅ Audio loaded. Signal analysis is ready.");
-  }catch(err){
-    console.error(err);
-    status("❌ Could not decode this file. Please use WAV, MP3, or M4A.");
-  }
+  const file=e.target.files?.[0];if(!file)return;
+  setStatus("Loading "+file.name+"…");
+  try{await decodeBlob(file);setStatus("✅ "+file.name+" loaded successfully.");}
+  catch(err){console.error(err);setStatus("❌ "+(err.message||"Could not read this audio file."));}
 };
 
-async function decodeBlob(blob){
-  currentBlob=blob;
-  const url=URL.createObjectURL(blob);
-  $("player").src=url;
-  $("player").load();
+$("predictBtn").onclick=()=>{
+  if(!model||!currentAudioBuffer){setStatus("⚠️ A trained TensorFlow.js model is required for prediction.");return;}
+  try{
+    const input=prepareModelInput(currentAudioBuffer),output=model.predict(input);
+    const tensor=Array.isArray(output)?output[0]:output,values=Array.from(tensor.dataSync());
+    let max=0;for(let i=1;i<values.length;i++)if(values[i]>values[max])max=i;
+    const p=values.map(v=>Number.isFinite(v)?Math.max(0,v):0),sum=p.reduce((a,b)=>a+b,0)||1,n=p.map(v=>v/sum);
+    const label=CLASSES[max]||("Class "+max),confidence=n[max]||0;
+    $("prediction").textContent=label;$("confidence").textContent=(confidence*100).toFixed(1)+"%";
+    $("bar").style.width=Math.min(100,confidence*100).toFixed(1)+"%";
+    $("probTable").innerHTML="<tr><th>Class</th><th>Probability</th></tr>"+n.map((v,i)=>"<tr><td>"+escapeHtml(CLASSES[i]||("Class "+i))+"</td><td>"+(v*100).toFixed(1)+"%</td></tr>").join("");
+    $("result").style.display="block";input.dispose?.();tensor.dispose?.();
+  }catch(e){console.error(e);setStatus("❌ The installed model input format does not match this website.");}
+};
 
-  if(!audioContext) audioContext=new (window.AudioContext||window.webkitAudioContext)();
-  if(audioContext.state==="suspended") await audioContext.resume();
-
-  const arr=await blob.arrayBuffer();
-  currentAudioBuffer=await audioContext.decodeAudioData(arr.slice(0));
-
-  const ch=currentAudioBuffer.getChannelData(0);
-  analyzeSamples(ch,currentAudioBuffer.sampleRate);
-
-  $("predictBtn").disabled=!model;
-  $("modelStatus").innerHTML=model
-    ? "✅ AI model loaded. <b>Analyze audio</b> is ready."
-    : "⚠️ Audio is ready, but no trained AI model is installed yet. Signal analysis works; disease prediction is unavailable.";
+function prepareModelInput(buffer){
+  const samples=buffer.getChannelData(0),target=20000,out=new Float32Array(target);
+  for(let i=0;i<target;i++){
+    const pos=i*(samples.length-1)/Math.max(1,target-1),a=Math.floor(pos),b=Math.min(samples.length-1,a+1),f=pos-a;
+    out[i]=samples[a]*(1-f)+samples[b]*f;
+  }
+  return tf.tensor(out,[1,target,1]);
 }
 
-$("predictBtn").onclick=predict;
-function escapeHtml(s){return String(s).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]))}
-
+window.addEventListener("resize",()=>{if(currentAudioBuffer)drawWave(currentAudioBuffer.getChannelData(0));});
 initModel();
 </script>
 </body>
