@@ -39,7 +39,7 @@ code{color:#8fe6ff}
 <span class="badge">RESPIRATORY SOUND ANALYZER</span>
 <h1>Lung Disease Classifier</h1>
 <p>Record or upload a respiratory sound and analyze its audio signal. If a compatible TensorFlow.js model is installed in <code>model/</code>, this page can run real browser-side inference.</p>
-<div class="notice"><b>Important:</b> This is a research/educational demonstration, not a medical diagnosis. Do not use the result to make treatment decisions.</div>
+
 </section>
 
 <div class="grid">
@@ -84,10 +84,6 @@ code{color:#8fe6ff}
 <p>The browser-ready trained ICBHI prototype model is embedded in this page for simple GitHub Pages deployment.</p>
 <p>The website now matches the trained model preprocessing: 4 kHz mono audio, 2-second center crop/pad, peak normalization. A model file alone is not enough if its scaler, feature order, or preprocessing pipeline is different.</p>
 <p><small>The browser runs the trained model locally with TensorFlow.js; no audio is uploaded to a server.</small></p>
-</section>
-<section class="card" style="margin-top:18px">
-<h2>Important</h2>
-<p class="notice">This prototype classifies respiratory sound patterns as normal, crackles, wheezes, or both. It is not a medical diagnosis and should not be used to make clinical decisions.</p>
 </section>
 </div>
 
@@ -145,16 +141,26 @@ function makeBrowserModel(spec){
     const [gamma,beta,mean,variance]=W[layer];
     return x.sub(mean).div(variance.add(epsilon).sqrt()).mul(gamma).add(beta);
   };
+  // Exact valid 1D max-pooling implemented with reshape + tf.max.
+  // This avoids tf.maxPool1d/tf.maxPool2d compatibility differences across browsers.
+  const pool1dValid=(x,k,s)=>{
+    const L=x.shape[1], C=x.shape[2];
+    const n=Math.floor((L-k)/s)+1;
+    if(n<=0) throw new Error("Invalid pooling shape: "+L);
+    const used=(n-1)*s+k;
+    const trimmed=x.slice([0,0,0],[x.shape[0],used,C]);
+    return trimmed.reshape([x.shape[0],n,k,C]).max(2);
+  };
   return {
     labels:spec.labels,
     predict(input){
       let x=input;
       x=tf.conv1d(x,W.conv1d[0],2,"same").add(W.conv1d[1]).relu();
       x=bn(x,"batch_normalization",0.001);
-      x=tf.maxPool1d(x,4,4,"valid");
+      x=pool1dValid(x,4,4);
       x=tf.conv1d(x,W.conv1d_1[0],2,"same").add(W.conv1d_1[1]).relu();
       x=bn(x,"batch_normalization_1",0.001);
-      x=tf.maxPool1d(x,4,4,"valid");
+      x=pool1dValid(x,4,4);
       x=tf.conv1d(x,W.conv1d_2[0],2,"same").add(W.conv1d_2[1]).relu();
       x=bn(x,"batch_normalization_2",0.001);
       x=x.mean(1);
@@ -349,6 +355,7 @@ $("predictBtn").onclick=()=>{
     $("probTable").innerHTML="<tr><th>Class</th><th>Probability</th></tr>"+
       n.map((v,i)=>"<tr><td>"+escapeHtml(CLASSES[i]||("Class "+i))+"</td><td>"+(v*100).toFixed(1)+"%</td></tr>").join("");
     $("result").style.display="block";
+    $("result").scrollIntoView({behavior:"smooth",block:"nearest"});
     setStatus("✅ Prediction completed locally. This is a respiratory-sound classification prototype, not a medical diagnosis.");
   }catch(e){
     console.error(e);
@@ -359,7 +366,7 @@ $("predictBtn").onclick=()=>{
   }
 };
 
-function prepareModelInput(buffer){
+function prepareModelInput(buffer){ 
   // Exact preprocessing used by the trained prototype:
   // mono -> resample to 4 kHz -> center crop/pad to 2 sec (8000 samples) -> peak normalize.
   const src=buffer.getChannelData(0), srcRate=buffer.sampleRate, targetRate=4000, target=8000;
